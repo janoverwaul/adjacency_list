@@ -1,0 +1,234 @@
+# ADJACENCY_LIST
+
+PHP-Klasse zur Verwaltung hierarchischer Baumstrukturen in MySQL 8+ / MariaDB über das Adjacency-List-Modell mit rekursiven CTEs.
+
+**Version:** 1.0 · **Autor:** Jan Overwaul + claude.ai · **Stand:** 2026
+
+---
+
+## Voraussetzungen
+
+- PHP 8.0+
+- MySQL 8.0+ oder MariaDB 10.2+ (für rekursive CTEs mit `WITH RECURSIVE`)
+- PDO-Extension aktiviert
+
+---
+
+## Setup
+1. `config.example.php` → `config.php` kopieren
+2. Zugangsdaten eintragen
+
+---
+
+## Installation
+
+Datei einbinden und Instanz erzeugen:
+
+```php
+require_once 'ADJACENCY_LIST.php';
+
+$tree = new ADJACENCY_LIST(
+    host:     'localhost',
+    dbname:   'meine_datenbank',
+    user:     'db_user',
+    password: 'geheim'
+);
+```
+
+Optional kann der Zeichensatz als fünfter Parameter übergeben werden (Standard: `utf8mb4`).
+
+---
+
+## Tabellenstruktur
+
+Die Klasse verwaltet Tabellen mit diesem Pflichtschema:
+
+| Spalte       | Typ               | Beschreibung                            |
+|--------------|-------------------|-----------------------------------------|
+| `id`         | INT UNSIGNED (PK) | Primärschlüssel, Auto-Increment         |
+| `name`       | VARCHAR(255)      | Bezeichnung des Knotens                 |
+| `parent_id`  | INT UNSIGNED      | ID des Elternknotens (`0` = Root-Ebene) |
+| `sort_order` | INT UNSIGNED      | Reihenfolge innerhalb der Geschwister   |
+| `online`     | TINYINT(1)        | Sichtbarkeit (`1` = online)             |
+
+> **Hinweis:** Existiert die Tabelle noch nicht, legt `ensure_table()` sie beim ersten Aufruf automatisch an. Bei vorhandener Tabelle wird das Schema geprüft – fehlende Pflichtfelder werfen eine `RuntimeException`.
+
+Eigene Spalten (z.B. `description`, `image`) können jederzeit ergänzt werden und werden von der Klasse nicht berührt.
+
+---
+
+## Methoden
+
+### `get_menge()`
+
+Liefert einen Knoten samt aller seiner Nachfahren als flaches Array zurück.
+
+```php
+$result = $tree->get_menge(
+    meng_num:  1,           // ID des Wurzelknotens
+    sql_table: 'navigation',
+    secure:    'secure'     // optional: nur online=1 Einträge
+);
+```
+
+Jede Zeile im Ergebnis enthält zusätzlich:
+
+| Feld        | Beschreibung                                |
+|-------------|---------------------------------------------|
+| `LEVEL`     | Tiefe im Baum (Wurzel = 0)                  |
+| `KINDER`    | Anzahl direkter Kinder                      |
+| `KONTROLLE` | `'auf'` = hat Kinder, `'zu'` = Blattknoten  |
+| `GROESSER`  | `1` = hat einen nachfolgenden Geschwister   |
+
+Gibt `false` zurück, wenn keine Einträge gefunden wurden.
+
+---
+
+### `insert_knoten()`
+
+Fügt einen neuen Knoten als letztes Kind eines Elternknotens ein.
+```php
+// Als Kind von Knoten 3 einfügen
+$tree->insert_knoten('Neuer Eintrag', 'navigation', parent_id: 3);
+
+// Root-Knoten anlegen (nur wenn noch keiner existiert)
+$tree->insert_knoten('Root-Eintrag', 'navigation');
+```
+
+Der `sort_order` wird automatisch als nächste freie Position berechnet.
+
+**Validierungen:**
+- Es darf nur einen Root-Knoten (`parent_id = 0`) geben → sonst `RuntimeException`
+- Der angegebene Elternknoten muss existieren → sonst `RuntimeException`
+
+---
+
+### `del_knoten()`
+
+Löscht einen Knoten **und rekursiv alle seine Unterknoten**.
+
+```php
+$tree->del_knoten(site_id: 5, sql_table: 'navigation');
+```
+
+> ⚠️ Diese Operation ist nicht umkehrbar. Alle Kindknoten werden mitgelöscht.
+
+---
+
+### `reorder_knoten()`
+
+Verschiebt einen Knoten innerhalb seiner Geschwister nach oben oder unten.
+
+```php
+// Eine Position nach oben
+$tree->reorder_knoten(site_id: 4, direction: 'links', sql_table: 'navigation');
+
+// Eine Position nach unten
+$tree->reorder_knoten(site_id: 4, direction: 'rechts', sql_table: 'navigation');
+```
+
+Intern werden die `sort_order`-Werte zweier Geschwisterknoten getauscht. Gibt es keinen Nachbarn in der gewünschten Richtung, wird eine `RuntimeException` geworfen.
+
+---
+
+### `move_knoten()`
+
+Verschiebt einen Knoten (inkl. aller Unterknoten) zu einem anderen Elternknoten.
+
+```php
+$tree->move_knoten(
+    site_id:       7,            // zu verschiebender Knoten
+    new_parent_id: 2,            // neues Elternelement
+    sql_table:     'navigation'
+);
+```
+
+**Validierungen:**
+- Ein Knoten kann nicht sein eigener Elternknoten sein → `InvalidArgumentException`
+- Der Zielknoten darf kein Nachfahre des Quellknotens sein → `InvalidArgumentException`
+
+---
+
+### `rename_knoten()`
+
+Benennt einen bestehenden Knoten um.
+```php
+$tree->rename_knoten(
+    site_id:   4,              // ID des Knotens
+    new_name:  'Neuer Name',   // Neuer Bezeichner
+    sql_table: 'navigation'
+);
+```
+
+**Validierungen:**
+- Der Knoten muss existieren → sonst `RuntimeException`
+- Der Name darf nicht leer sein → `InvalidArgumentException`
+
+Unterknoten und `sort_order` bleiben unverändert.
+
+---
+
+## Vollständiges Beispiel
+
+```php
+require_once 'ADJACENCY_LIST.php';
+
+$tree = new ADJACENCY_LIST('localhost', 'shop', 'root', 'geheim');
+
+// Kategoriebaum aufbauen
+$tree->insert_knoten('Elektronik',  'kategorien');          // ID 1, Root
+$tree->insert_knoten('Smartphones', 'kategorien', 1);       // ID 2, Kind von 1
+$tree->insert_knoten('Laptops',     'kategorien', 1);       // ID 3, Kind von 1
+$tree->insert_knoten('iPhone',      'kategorien', 2);       // ID 4, Kind von 2
+
+// Gesamten Baum ab Wurzel holen
+$baum = $tree->get_menge(1, 'kategorien');
+foreach ($baum as $knoten) {
+    $indent = str_repeat('  ', $knoten['LEVEL']);
+    echo $indent . $knoten['name']
+       . ' [Kinder: ' . $knoten['KINDER'] . ']'
+       . "\n";
+}
+
+// Laptops vor Smartphones sortieren
+$tree->reorder_knoten(3, 'links', 'kategorien');
+
+// Smartphones in neue Oberkategorie verschieben
+$tree->insert_knoten('Mobilgeräte', 'kategorien');          // ID 5, Root
+$tree->move_knoten(2, 5, 'kategorien');
+
+// Knoten löschen (inkl. iPhone)
+$tree->del_knoten(2, 'kategorien');
+```
+
+---
+
+## Fehlerbehandlung
+
+Alle Methoden können folgende Exceptions werfen:
+
+| Exception                  | Ursache                                                      |
+|----------------------------|--------------------------------------------------------------|
+| `PDOException`             | Datenbankverbindungsfehler oder SQL-Fehler                   |
+| `RuntimeException`         | Knoten nicht gefunden, Schema ungültig, kein Geschwister     |
+| `InvalidArgumentException` | Ungültige ID, zirkuläre Verschiebung                         |
+
+Empfohlenes Muster:
+
+```php
+try {
+    $tree->move_knoten(7, 2, 'navigation');
+} catch (InvalidArgumentException $e) {
+    echo 'Ungültige Operation: ' . $e->getMessage();
+} catch (RuntimeException $e) {
+    echo 'Fehler: ' . $e->getMessage();
+}
+```
+
+---
+
+## Hinweise
+
+- Die Klasse basiert konzeptionell auf der `NESTEDSET`-Klasse von Oliver Blum (2007), wurde jedoch vollständig für das Adjacency-List-Modell neu implementiert.
+- Das Verschieben von Knoten (`move_knoten`) war in der ursprünglichen NESTEDSET-Klasse als „coming soon" markiert – hier vollständig umgesetzt.
+- Für sehr große Bäume (10.000+ Knoten) empfiehlt sich ein Index auf `(parent_id, sort_order)` – dieser wird bei auto-erstellten Tabellen bereits angelegt.
