@@ -68,7 +68,7 @@ class ADJACENCY_LIST {
 	 * @return true
 	 * @throws RuntimeException wenn das Schema nicht passt
 	 */
-	private function ensure_table(string $sql_table): true {
+	protected function ensure_table(string $sql_table): true {
 		// MariaDB-kompatibel: kein Prepared Statement für SHOW TABLES
 		$escaped = $this->pdo->quote($sql_table);
 		$stmt    = $this->pdo->query("SHOW TABLES LIKE {$escaped}");
@@ -111,7 +111,7 @@ class ADJACENCY_LIST {
      * @param int|null $link_id ID des Knotens
      * @return array|false
      */
-	private function get_link_info(string $sql_table, ?int $link_id): array {
+	protected function get_link_info(string $sql_table, ?int $link_id): array {
 		if (!$link_id) {
 			throw new InvalidArgumentException("Ungültige ID: null oder 0 übergeben.");
 		}
@@ -133,7 +133,7 @@ class ADJACENCY_LIST {
      * @param int $parent_id    Eltern-ID
      * @return int
      */
-    private function get_next_sort_order(string $sql_table, int $parent_id): int {
+    protected function get_next_sort_order(string $sql_table, int $parent_id): int {
         $stmt = $this->pdo->prepare(
             "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_pos
                FROM `{$sql_table}`
@@ -414,3 +414,4 @@ class ADJACENCY_LIST {
 		return $stmt->execute([':name' => $new_name, ':id' => $site_id]);
 	}
 }
+
