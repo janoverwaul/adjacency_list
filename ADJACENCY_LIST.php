@@ -258,29 +258,38 @@ class ADJACENCY_LIST {
      * @param string $sql_table  Tabellenname
      * @return bool
      */
-    public function del_knoten(int $site_id, string $sql_table): bool {
-        $this->ensure_table($sql_table);
+	public function del_knoten(int $site_id, string $sql_table): bool {
+		$this->ensure_table($sql_table);
+		$this->get_link_info($sql_table, $site_id);
 
-        $info = $this->get_link_info($sql_table, $site_id);
-        if (!$info) {
-            return false;
-        }
+		// Alle Nachfahren-IDs per CTE sammeln
+		$sql = "
+			WITH RECURSIVE nachfahren AS (
+				SELECT id FROM `{$sql_table}` WHERE id = :start_id
+				UNION ALL
+				SELECT n.id FROM `{$sql_table}` n
+				INNER JOIN nachfahren nd ON n.parent_id = nd.id
+			)
+			SELECT id FROM nachfahren
+		";
 
-        // Alle Nachfahren-IDs per rekursiver CTE ermitteln, dann löschen
-        $sql = "
-            WITH RECURSIVE nachfahren AS (
-                SELECT id FROM `{$sql_table}` WHERE id = :start_id
-                UNION ALL
-                SELECT n.id FROM `{$sql_table}` n
-                INNER JOIN nachfahren nd ON n.parent_id = nd.id
-            )
-            DELETE FROM `{$sql_table}`
-            WHERE id IN (SELECT id FROM nachfahren)
-        ";
+		$stmt = $this->pdo->prepare($sql);
+		$stmt->execute([':start_id' => $site_id]);
+		$ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute([':start_id' => $site_id]);
-    }
+		if (empty($ids)) return false;
+
+		$placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+		$this->pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+		try {
+			$del = $this->pdo->prepare("DELETE FROM `{$sql_table}` WHERE id IN ({$placeholders})");
+			$result = $del->execute($ids);
+		} finally {
+			$this->pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+		}
+		return $result;
+	}
 
     /**
      * Verschiebt einen Knoten nach oben oder unten innerhalb seiner Geschwister.
@@ -413,5 +422,23 @@ class ADJACENCY_LIST {
 		);
 		return $stmt->execute([':name' => $new_name, ':id' => $site_id]);
 	}
-}
 
+	/**
+	 * Ermittelt die ID des Root-Knotens (parent_id = 0) einer Tabelle.
+	 * Wird benötigt, da AUTO_INCREMENT-IDs nach Löschvorgängen nicht
+	 * zwingend bei 1 beginnen – der Root-Knoten ist immer über
+	 * parent_id = 0 definiert, nicht über eine feste ID.
+	 *
+	 * @param string $sql_table Tabellenname
+	 * @return int|null         ID des Root-Knotens, oder null wenn Tabelle leer
+	 */
+	public function get_root_id(string $sql_table): ?int {
+		$this->ensure_table($sql_table);
+		$stmt = $this->pdo->prepare(
+			"SELECT id FROM `{$sql_table}` WHERE parent_id = 0 LIMIT 1"
+		);
+		$stmt->execute();
+		$id = $stmt->fetchColumn();
+		return $id !== false ? (int)$id : null;
+	}
+}
